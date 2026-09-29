@@ -35,6 +35,10 @@ spec:
   debug: true   # serve guest services inside the sandbox so `ax ssh` works; off by default
 ```
 
+### Compute resources
+
+`spec.resources` takes Kubernetes-style quantities (`500m`, `2`, `4Gi`). `limits` is set on the task's ActorTemplate, and Agent Substrate caps the actor's CPU and memory at those values. Agent Substrate has no notion of requests, so `requests` does not affect sizing or placement. It is validated and passed to the runner in `AX_TASK_YAML`, where your command can read it. `ax apply` rejects quantities that do not parse, are not positive, a CPU limit of 1000 cores or more, and a request larger than its limit.
+
 ### Binding several workspaces
 
 `spec.workspaces` takes as many entries as you like, so a task can compose reusable `Workspace` resources, for example the code to work on plus a shared set of tools:

@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -314,6 +315,9 @@ func ValidateTask(t *Task) error {
 	if spec == nil {
 		return nil
 	}
+	if err := validateResources(spec.GetResources()); err != nil {
+		return err
+	}
 	refs := spec.WorkspaceRefs()
 	paths := spec.WorkspacePaths()
 	names := make(map[string]bool, len(refs))
@@ -338,6 +342,93 @@ func ValidateTask(t *Task) error {
 			return fmt.Errorf("%s: path %q is already used by workspace %q", field, paths[i], other)
 		}
 		seen[p] = r.GetName()
+	}
+	return nil
+}
+
+// Compute resources.
+//
+// Quantities use the Kubernetes resource.Quantity string form ("500m", "2",
+// "4Gi"). Substrate rejects a template whose limits do not parse, and the
+// reconciler would then fall back to the unsized default template, so they are
+// checked at apply time instead.
+
+// MaxCPULimit is the exclusive upper bound, in cores, on spec.resources.limits.cpu.
+const MaxCPULimit = 1000
+
+var quantityRegexp = regexp.MustCompile(`^([0-9]+(?:\.[0-9]*)?|\.[0-9]+)(Ki|Mi|Gi|Ti|Pi|Ei|[numkMGTPE]|[eE][+-]?[0-9]+)?$`)
+
+var quantitySuffixes = map[string]float64{
+	"n": 1e-9, "u": 1e-6, "m": 1e-3, "": 1,
+	"k": 1e3, "M": 1e6, "G": 1e9, "T": 1e12, "P": 1e15, "E": 1e18,
+	"Ki": 1 << 10, "Mi": 1 << 20, "Gi": 1 << 30, "Ti": 1 << 40, "Pi": 1 << 50, "Ei": 1 << 60,
+}
+
+// ParseQuantity returns the value of a Kubernetes-style quantity in base units
+// (cores for cpu, bytes for memory).
+func ParseQuantity(s string) (float64, error) {
+	m := quantityRegexp.FindStringSubmatch(s)
+	if m == nil {
+		return 0, fmt.Errorf("%q is not a valid quantity", s)
+	}
+	n, err := strconv.ParseFloat(m[1], 64)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not a valid quantity", s)
+	}
+	suffix := m[2]
+	if mult, ok := quantitySuffixes[suffix]; ok {
+		return n * mult, nil
+	}
+	exp, err := strconv.Atoi(suffix[1:])
+	if err != nil {
+		return 0, fmt.Errorf("%q is not a valid quantity", s)
+	}
+	return n * math.Pow10(exp), nil
+}
+
+// validateResources checks that every quantity parses and is positive, that
+// the cpu limit is below MaxCPULimit, and that no request exceeds its limit.
+func validateResources(r *ResourceReqs) error {
+	if r == nil {
+		return nil
+	}
+	parse := func(field, v string) (float64, error) {
+		if v == "" {
+			return 0, nil
+		}
+		q, err := ParseQuantity(v)
+		if err != nil {
+			return 0, fmt.Errorf("spec.resources.%s: %w", field, err)
+		}
+		if q <= 0 {
+			return 0, fmt.Errorf("spec.resources.%s: %q must be greater than zero", field, v)
+		}
+		return q, nil
+	}
+	reqCPU, err := parse("requests.cpu", r.GetRequests().GetCpu())
+	if err != nil {
+		return err
+	}
+	reqMem, err := parse("requests.memory", r.GetRequests().GetMemory())
+	if err != nil {
+		return err
+	}
+	limCPU, err := parse("limits.cpu", r.GetLimits().GetCpu())
+	if err != nil {
+		return err
+	}
+	limMem, err := parse("limits.memory", r.GetLimits().GetMemory())
+	if err != nil {
+		return err
+	}
+	if limCPU >= MaxCPULimit {
+		return fmt.Errorf("spec.resources.limits.cpu: %q must be less than %d cores", r.GetLimits().GetCpu(), MaxCPULimit)
+	}
+	if limCPU > 0 && reqCPU > limCPU {
+		return fmt.Errorf("spec.resources.requests.cpu: %q exceeds limits.cpu %q", r.GetRequests().GetCpu(), r.GetLimits().GetCpu())
+	}
+	if limMem > 0 && reqMem > limMem {
+		return fmt.Errorf("spec.resources.requests.memory: %q exceeds limits.memory %q", r.GetRequests().GetMemory(), r.GetLimits().GetMemory())
 	}
 	return nil
 }

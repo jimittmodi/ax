@@ -487,6 +487,52 @@ func TestValidateTask(t *testing.T) {
 			spec:    &v1alpha1.TaskSpec{Workspaces: []*v1alpha1.WorkspaceRef{{Name: "a", Path: "rel"}}},
 			wantErr: "spec.workspaces[0]: path \"rel\" must be absolute",
 		},
+		{
+			name: "resources from docs",
+			spec: &v1alpha1.TaskSpec{Resources: &v1alpha1.ResourceReqs{Requests: &v1alpha1.ResourceList{Cpu: "500m", Memory: "1Gi"}, Limits: &v1alpha1.ResourceList{Cpu: "2", Memory: "4Gi"}}},
+		},
+		{
+			name: "resources limits only",
+			spec: &v1alpha1.TaskSpec{Resources: &v1alpha1.ResourceReqs{Limits: &v1alpha1.ResourceList{Cpu: "1.5", Memory: "512M"}}},
+		},
+		{
+			name: "resources exponent form",
+			spec: &v1alpha1.TaskSpec{Resources: &v1alpha1.ResourceReqs{Requests: &v1alpha1.ResourceList{}, Limits: &v1alpha1.ResourceList{Memory: "1e9"}}},
+		},
+		{
+			name:    "malformed cpu limit",
+			spec:    &v1alpha1.TaskSpec{Resources: &v1alpha1.ResourceReqs{Requests: &v1alpha1.ResourceList{}, Limits: &v1alpha1.ResourceList{Cpu: "two"}}},
+			wantErr: `spec.resources.limits.cpu: "two" is not a valid quantity`,
+		},
+		{
+			name:    "malformed memory request",
+			spec:    &v1alpha1.TaskSpec{Resources: &v1alpha1.ResourceReqs{Requests: &v1alpha1.ResourceList{Memory: "1GB"}, Limits: &v1alpha1.ResourceList{}}},
+			wantErr: `spec.resources.requests.memory: "1GB" is not a valid quantity`,
+		},
+		{
+			name:    "zero limit",
+			spec:    &v1alpha1.TaskSpec{Resources: &v1alpha1.ResourceReqs{Requests: &v1alpha1.ResourceList{}, Limits: &v1alpha1.ResourceList{Memory: "0"}}},
+			wantErr: `spec.resources.limits.memory: "0" must be greater than zero`,
+		},
+		{
+			name:    "negative limit",
+			spec:    &v1alpha1.TaskSpec{Resources: &v1alpha1.ResourceReqs{Requests: &v1alpha1.ResourceList{}, Limits: &v1alpha1.ResourceList{Cpu: "-1"}}},
+			wantErr: "not a valid quantity",
+		},
+		{
+			name:    "cpu limit too large",
+			spec:    &v1alpha1.TaskSpec{Resources: &v1alpha1.ResourceReqs{Requests: &v1alpha1.ResourceList{}, Limits: &v1alpha1.ResourceList{Cpu: "1000"}}},
+			wantErr: "must be less than 1000 cores",
+		},
+		{
+			name:    "request exceeds limit",
+			spec:    &v1alpha1.TaskSpec{Resources: &v1alpha1.ResourceReqs{Requests: &v1alpha1.ResourceList{Memory: "8Gi"}, Limits: &v1alpha1.ResourceList{Memory: "4Gi"}}},
+			wantErr: `spec.resources.requests.memory: "8Gi" exceeds limits.memory "4Gi"`,
+		},
+		{
+			name: "request without limit",
+			spec: &v1alpha1.TaskSpec{Resources: &v1alpha1.ResourceReqs{Requests: &v1alpha1.ResourceList{Cpu: "64"}, Limits: &v1alpha1.ResourceList{}}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

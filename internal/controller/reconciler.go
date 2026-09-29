@@ -172,7 +172,7 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, task *v1alpha1.Task, wor
 		slog.Info("ensuring custom ActorTemplate for task", "image", task.Spec.Image)
 		customTemplateName := taskTemplateName(task.Metadata.Name, task.Spec.Image, extraEnv)
 
-		tmpl, err := r.client.EnsureActorTemplateWithImage(ctx, templateAtespace, templateName, atespace, customTemplateName, task.Spec.Image, extraEnv)
+		tmpl, err := r.client.EnsureActorTemplateWithImage(ctx, templateAtespace, templateName, atespace, customTemplateName, task.Spec.Image, substrate.ResourcesFromSpec(task.Spec.Resources), extraEnv)
 		if err != nil {
 			slog.Warn("could not create custom ActorTemplate, falling back to default template", "error", err)
 		} else if tmpl != nil && tmpl.Metadata != nil {

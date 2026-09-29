@@ -18,6 +18,7 @@ The control plane does not run `spec.command` as the container entrypoint. It al
 | `AX_WORKSPACES_YAML` | Every bound `Workspace` resource as a multi-document YAML stream, in the task's binding order |
 | `spec.env` entries | Each one set directly in the container environment |
 | `GEMINI_API_KEY` | Set when the atespace has a Gemini credential configured |
+| Resource limits | `spec.resources.limits` (`cpu`, `memory`), set on the actor's template so the sandbox is capped by them; the runner does not apply them |
 | Volume | A durable directory mounted at `/workspace` |
 | Readiness probe | `GET /readyz` on port 80 |
 

@@ -31,6 +31,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 type mockControlServer struct {
@@ -42,6 +43,7 @@ type mockControlServer struct {
 	suspendedActors  []string
 	deletedActors    []string
 	actorTemplates   map[string]bool
+	createdTemplates []*ateapipb.ActorTemplate
 	deletedTemplates []string
 	getActorFunc     func(ctx context.Context, req *ateapipb.GetActorRequest) (*ateapipb.Actor, error)
 	crashedActor     string
@@ -67,6 +69,7 @@ func (m *mockControlServer) CreateActorTemplate(_ context.Context, req *ateapipb
 	}
 	tmpl := req.GetActorTemplate()
 	m.actorTemplates[tmpl.GetMetadata().GetName()] = true
+	m.createdTemplates = append(m.createdTemplates, tmpl)
 	return tmpl, nil
 }
 
@@ -312,6 +315,63 @@ func TestTaskReconciler_Suspend(t *testing.T) {
 	}
 	if len(mockSrv.suspendedActors) != 1 || mockSrv.suspendedActors[0] != "suspend-task" {
 		t.Errorf("expected actor 'suspend-task' suspended, got %v", mockSrv.suspendedActors)
+	}
+}
+
+// TestTaskReconciler_ResourceLimits checks that spec.resources.limits sizes the
+// actor through its ActorTemplate rather than only reaching AX_TASK_YAML (#436).
+func TestTaskReconciler_ResourceLimits(t *testing.T) {
+	ctx := context.Background()
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	defer lis.Close()
+
+	mockSrv := &mockControlServer{}
+	grpcServer := grpc.NewServer()
+	ateapipb.RegisterControlServer(grpcServer, mockSrv)
+	go grpcServer.Serve(lis)
+	defer grpcServer.Stop()
+
+	client, err := substrate.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("failed to create substrate client: %v", err)
+	}
+	defer client.Close()
+
+	reconciler := controller.NewTaskReconciler(client, "test-template", "ax-system")
+	reconciler.SecretResolver = noSecrets
+
+	task := &v1alpha1.Task{
+		ApiVersion: v1alpha1.APIVersion,
+		Kind:       v1alpha1.KindTask,
+		Metadata: &v1alpha1.ObjectMeta{
+			Name:     "sized-task",
+			Atespace: "default",
+		},
+		Spec: &v1alpha1.TaskSpec{
+			Resources: &v1alpha1.ResourceReqs{
+				Requests: &v1alpha1.ResourceList{Cpu: "500m", Memory: "1Gi"},
+				Limits:   &v1alpha1.ResourceList{Cpu: "2", Memory: "4Gi"},
+			},
+		},
+	}
+
+	if _, err := reconciler.Reconcile(ctx, task, nil); err != nil {
+		t.Fatalf("Reconcile failed: %v", err)
+	}
+
+	if len(mockSrv.createdTemplates) != 1 {
+		t.Fatalf("expected 1 ActorTemplate created, got %d", len(mockSrv.createdTemplates))
+	}
+	want := &ateapipb.Resources{Limits: []*ateapipb.Limits{
+		{Name: "cpu", Quantity: "2"},
+		{Name: "memory", Quantity: "4Gi"},
+	}}
+	if got := mockSrv.createdTemplates[0].GetResources(); !proto.Equal(got, want) {
+		t.Errorf("template resources = %v, want %v", got, want)
 	}
 }
 

@@ -22,9 +22,11 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/google/ax/pkg/apis/v1alpha1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 type mockControlClient struct {
@@ -138,5 +140,44 @@ func TestClient_DeleteActor_PropagatesRPCError(t *testing.T) {
 	err := c.DeleteActor(ctx, "test-ns", "test-actor")
 	if err == nil {
 		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestResourcesFromSpec(t *testing.T) {
+	tests := []struct {
+		name string
+		in   *v1alpha1.ResourceReqs
+		want *ateapipb.Resources
+	}{
+		{name: "nil"},
+		{name: "requests only", in: &v1alpha1.ResourceReqs{Requests: &v1alpha1.ResourceList{Cpu: "500m"}}},
+		{
+			name: "cpu and memory limits",
+			in: &v1alpha1.ResourceReqs{
+				Requests: &v1alpha1.ResourceList{Cpu: "500m", Memory: "1Gi"},
+				Limits:   &v1alpha1.ResourceList{Cpu: "2", Memory: "4Gi"},
+			},
+			want: &ateapipb.Resources{Limits: []*ateapipb.Limits{
+				{Name: "cpu", Quantity: "2"},
+				{Name: "memory", Quantity: "4Gi"},
+			}},
+		},
+		{
+			name: "memory limit only",
+			in:   &v1alpha1.ResourceReqs{Limits: &v1alpha1.ResourceList{Memory: "512Mi"}},
+			want: &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "memory", Quantity: "512Mi"}}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ResourcesFromSpec(tt.in)
+			if !proto.Equal(got, tt.want) {
+				t.Errorf("ResourcesFromSpec() = %v, want %v", got, tt.want)
+			}
+			tmpl := BuildActorTemplate("default", "t", "", nil, nil, "gs://bucket/", got)
+			if !proto.Equal(tmpl.GetResources(), tt.want) {
+				t.Errorf("BuildActorTemplate resources = %v, want %v", tmpl.GetResources(), tt.want)
+			}
+		})
 	}
 }
